@@ -1,0 +1,7 @@
+{
+  "created_at": "2026-10-12T03:45:00Z",
+  "description": "Initial stable bilingual build. Shows the original subtitle above a context-aware AI translation, based on Anchored AI Captions v1.5.1.",
+  "download_url": "https://github.com/zhuzhangxue/youtube-android-bilingual-ai-captions/releases/download/v1.0.0/anchored-ai-captions-bilingual.mpp",
+  "signature_download_url": "",
+  "version": "1.0.0"
+}
