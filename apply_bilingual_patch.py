@@ -209,6 +209,16 @@ for row in provenance.get("files", []):
         hits += 1
 if hits != 1:
     raise SystemExit(f"expected one provenance row for RebuildController, found {hits}")
+
+presentation_sha = hashlib.sha256((ROOT / presentation).read_bytes()).hexdigest()
+presentation_hits = 0
+for row in provenance.get("new_files", []):
+    if row.get("path") == presentation:
+        row["sha256"] = presentation_sha
+        presentation_hits += 1
+if presentation_hits != 1:
+    raise SystemExit(f"expected one provenance row for TranslationPresentation, found {presentation_hits}")
+
 provenance_path.write_text(json.dumps(provenance, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 print("updated core provenance")
 print("Bilingual v1.0.2 layout patch applied.")
