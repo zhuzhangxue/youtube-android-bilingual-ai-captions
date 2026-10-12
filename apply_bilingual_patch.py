@@ -48,14 +48,12 @@ replace_once(
 replace_once(
     "gradle.properties",
     "version=1.5.1\ncaptionBuildId=release-1.5.1\n",
-    "version=1.0.1\ncaptionBuildId=bilingual-1.0.1-safe\n",
+    "version=1.0.2\ncaptionBuildId=bilingual-1.0.2-layout\n",
 )
 
-# Safe bilingual implementation:
-# Keep the entire upstream overlay/settings stack untouched. Only at the final
-# translated-unit boundary, prepend the exact source span to the translated text.
-# This preserves Anchored's context-aware translation, cache, timing and API behavior,
-# while avoiding the v1.0.0 overlay changes that caused launch crashes on a real device.
+# 1) Carry the exact source subtitle with each accepted translated display unit.
+# Translation itself remains completely upstream-owned: same context window, API call,
+# cache, validation and timing.
 controller = "translation-core/src/main/java/app/yydarlinker/deepseekcaptions/RebuildController.java"
 
 replace_once(
@@ -100,6 +98,106 @@ replace_once(
 ''',
 )
 
+# 2) Keep a bilingual pair on one timed page whenever it can fit in four lines.
+# If even the minimum subtitle size cannot fit it, fall back to the translated half only
+# rather than paging source and translation separately.
+presentation = "translation-core/src/main/java/app/yydarlinker/deepseekcaptions/TranslationPresentation.java"
+replace_once(
+    presentation,
+    '''        TranslationBudget budget=new TranslationBudget(geometry.width,geometry.minimumPx,geometry.preferredPx,spec);
+        List<RebuildPageLayout.Page> planned=RebuildPageLayout.plan(text,start,end,budget,spec);
+''',
+    '''        TranslationBudget budget=new TranslationBudget(geometry.width,geometry.minimumPx,geometry.preferredPx,spec);
+        int bilingualBreak=text==null?-1:text.indexOf('\n');
+        if(bilingualBreak>0 && bilingualBreak<text.length()-1){
+            float size=budget.preferredPx;
+            while(size>budget.minimumPx && !spec.fits(text,size,budget.width,4))
+                size=Math.max(budget.minimumPx,size-.5f);
+            if(spec.fits(text,size,budget.width,4)){
+                StaticLayout layout=spec.layout(text,size,budget.width);
+                int cut=layout.getLineCount()>1?layout.getLineEnd(0):text.length();
+                CaptionLinePlan line=new CaptionLinePlan(
+                    text,0,text.length(),cut,
+                    layout.getLineMax(0),
+                    layout.getLineCount()>1?layout.getLineMax(1):0,
+                    CaptionLinePlan.CutClass.LANGUAGE_BOUNDARY);
+                return Collections.singletonList(new CaptionDisplayPage(
+                    line.displayText,start,end,0,text.length(),
+                    "BILINGUAL_SOURCE_EVENT",line));
+            }
+            text=text.substring(bilingualBreak+1).trim();
+        }
+        List<RebuildPageLayout.Page> planned=RebuildPageLayout.plan(text,start,end,budget,spec);
+''',
+)
+
+# 3) Let the existing overlay render bilingual pages in up to four lines.
+# This deliberately does NOT add new views, settings classes or lifecycle hooks;
+# v1.0.0 did that and crashed on the user's device. Here we only widen the existing
+# TextView's line budget when the already-prepared display text is bilingual.
+overlay = "ui/src/main/java/app/yydarlinker/deepseekcaptions/CaptionOverlayV2.java"
+
+replace_once(
+    overlay,
+    '''    String reason=shown.isEmpty() && currentGuard!=null ? currentGuard.blankReason() : "";
+''',
+    '''    boolean bilingualBody=ownedCaption && shown.indexOf('\n')>=0;
+    int visibleMaxLines=bilingualBody?4:2;
+    if(bilingualBody){
+      while(size>minimum && !measuredSpec.fits(shown,size,inner,visibleMaxLines))
+        size=Math.max(minimum,size-.5f);
+    }
+    String reason=shown.isEmpty() && currentGuard!=null ? currentGuard.blankReason() : "";
+''',
+)
+
+replace_once(
+    overlay,
+    '''    text.setTextSize(TypedValue.COMPLEX_UNIT_PX,size);
+    text.setSingleLine(false);text.setMaxLines(2);text.setEllipsize(null);
+''',
+    '''    text.setTextSize(TypedValue.COMPLEX_UNIT_PX,size);
+    text.setSingleLine(false);text.setMaxLines(visibleMaxLines);text.setEllipsize(null);
+''',
+)
+
+replace_once(
+    overlay,
+    '''  private static int applyVisibleText(TextView text,String shown,float size,int maximumInnerPx,CaptionRenderSpec spec,CaptionLinePlan line) {
+    boolean same=CaptionSettingPreference.sameText(text.getText(),shown)&&text.getTextSize()==size&&text.getPaint().equalsForTextMeasurement(spec.paint(size));
+    spec.apply(text);if(text.getTextSize()!=size)text.setTextSize(TypedValue.COMPLEX_UNIT_PX,size);if(!CaptionSettingPreference.sameText(text.getText(),shown))text.setText(shown);
+    if(text.getMaxLines()!=2){text.setSingleLine(false);text.setMaxLines(2);}if(text.getEllipsize()!=null)text.setEllipsize(null);
+''',
+    '''  private static int applyVisibleText(TextView text,String shown,float size,int maximumInnerPx,CaptionRenderSpec spec,CaptionLinePlan line) {
+    int maxLines=shown.indexOf('\n')>=0?4:2;
+    boolean same=CaptionSettingPreference.sameText(text.getText(),shown)&&text.getTextSize()==size&&text.getPaint().equalsForTextMeasurement(spec.paint(size));
+    spec.apply(text);if(text.getTextSize()!=size)text.setTextSize(TypedValue.COMPLEX_UNIT_PX,size);if(!CaptionSettingPreference.sameText(text.getText(),shown))text.setText(shown);
+    if(text.getMaxLines()!=maxLines){text.setSingleLine(false);text.setMaxLines(maxLines);}if(text.getEllipsize()!=null)text.setEllipsize(null);
+''',
+)
+
+replace_once(
+    overlay,
+    '''    float contentWidthPx=line!=null?Math.max(line.line1Px,line.line2Px):same&&text.getLayout()!=null&&text.getLayout().getLineCount()==1?text.getLayout().getLineMax(0):spec.actualWidth(spec.layout(shown,size,maximumInnerPx));
+''',
+    '''    float contentWidthPx=maxLines>2?spec.actualWidth(spec.layout(shown,size,maximumInnerPx))
+        :line!=null?Math.max(line.line1Px,line.line2Px)
+        :same&&text.getLayout()!=null&&text.getLayout().getLineCount()==1?text.getLayout().getLineMax(0)
+        :spec.actualWidth(spec.layout(shown,size,maximumInnerPx));
+''',
+)
+
+text = read(overlay)
+needle = "spec.fits(shown,text.getLayout(),boxWidthPx-padding,2))return boxWidthPx;"
+count = text.count(needle)
+if count != 2:
+    raise SystemExit(f"{overlay}: expected 2 two-line fit checks, found {count}")
+write(overlay, text.replace(
+    needle,
+    "spec.fits(shown,text.getLayout(),boxWidthPx-padding,maxLines))return boxWidthPx;"
+))
+print("patched bilingual fit checks")
+
 # Keep upstream integration verification truthful after the intentional core adaptation.
 provenance_path = ROOT / "docs/core-provenance.json"
 provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
@@ -113,4 +211,4 @@ if hits != 1:
     raise SystemExit(f"expected one provenance row for RebuildController, found {hits}")
 provenance_path.write_text(json.dumps(provenance, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 print("updated core provenance")
-print("Bilingual safe-mode patch applied.")
+print("Bilingual v1.0.2 layout patch applied.")
