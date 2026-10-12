@@ -48,7 +48,7 @@ replace_once(
 replace_once(
     "gradle.properties",
     "version=1.5.1\ncaptionBuildId=release-1.5.1\n",
-    "version=1.0.7\ncaptionBuildId=bilingual-1.0.7-main-ui-portrait-only\n",
+    "version=1.0.8\ncaptionBuildId=bilingual-1.0.8-readable-two-line\n",
 )
 
 # Add an independent patch that restores portrait orientation after leaving
@@ -244,7 +244,11 @@ replace_once(
         if(source==null||translated==null||source.isEmpty()||translated.isEmpty()||end<=start)
             return Collections.emptyList();
         long duration=end-start;
-        int maxPages=(int)Math.max(1,Math.min(8,duration/900L));
+        int maxPages=(int)Math.max(1,Math.min(10,Math.max(1,duration/700L)));
+        float readableFloor=Math.max(budget.minimumPx,budget.preferredPx*.84f);
+
+        // First pass: preserve a comfortable subtitle size. If a pair is too long,
+        // split it into more timed 1+1 pages instead of shrinking the whole pair.
         for(int count=1;count<=maxPages;count++){
             List<String> sources=balancedParts(source,count);
             List<String> targets=balancedParts(translated,count);
@@ -253,7 +257,7 @@ replace_once(
             boolean ok=true;
             for(int i=0;i<count;i++){
                 String pair=sources.get(i)+"\\n"+targets.get(i);
-                float size=largestFittingSize(pair,budget,spec);
+                float size=largestFittingSize(pair,budget,spec,readableFloor);
                 if(size<0){ok=false;break;}
                 sizes.add(size);
             }
@@ -277,13 +281,44 @@ replace_once(
             }
             if(ok&&!result.isEmpty())return Collections.unmodifiableList(result);
         }
+
+        // Emergency pass: only if no readable split fits within the available event time.
+        // This preserves content for unusually dense/fast speech, but ordinary long lines
+        // should now be split before reaching this smaller-size path.
+        for(int count=maxPages;count>=1;count--){
+            List<String> sources=balancedParts(source,count);
+            List<String> targets=balancedParts(translated,count);
+            if(sources.size()!=count||targets.size()!=count)continue;
+            List<CaptionDisplayPage> result=new ArrayList<>();
+            boolean ok=true;
+            for(int i=0;i<count;i++){
+                String pair=sources.get(i)+"\\n"+targets.get(i);
+                float size=largestFittingSize(pair,budget,spec,budget.minimumPx);
+                if(size<0){ok=false;break;}
+                StaticLayout layout=spec.layout(pair,size,budget.width);
+                if(layout.getLineCount()!=2){ok=false;break;}
+                int cut=sources.get(i).length()+1;
+                CaptionLinePlan line=new CaptionLinePlan(
+                    pair,0,pair.length(),cut,
+                    layout.getLineMax(0),layout.getLineMax(1),
+                    CaptionLinePlan.CutClass.LANGUAGE_BOUNDARY);
+                long pageStart=start+(duration*i)/count;
+                long pageEnd=i==count-1?end:start+(duration*(i+1))/count;
+                result.add(new CaptionDisplayPage(
+                    line.displayText,pageStart,pageEnd,0,pair.length(),
+                    "BILINGUAL_ONE_PLUS_ONE_EMERGENCY",line));
+            }
+            if(ok&&!result.isEmpty())return Collections.unmodifiableList(result);
+        }
         return Collections.emptyList();
     }
 
-    private static float largestFittingSize(String pair,TranslationBudget budget,CaptionRenderSpec spec){
+    private static float largestFittingSize(String pair,TranslationBudget budget,
+        CaptionRenderSpec spec,float floorPx){
+        float floor=Math.max(budget.minimumPx,Math.min(budget.preferredPx,floorPx));
         float size=budget.preferredPx;
-        while(size>budget.minimumPx && !spec.fits(pair,size,budget.width,2))
-            size=Math.max(budget.minimumPx,size-.5f);
+        while(size>floor && !spec.fits(pair,size,budget.width,2))
+            size=Math.max(floor,size-.5f);
         return spec.fits(pair,size,budget.width,2)?size:-1;
     }
 
@@ -345,8 +380,9 @@ replace_once(
 ''',
     '''    boolean bilingualBody=ownedCaption && shown.indexOf('\\n')>=0;
     if(bilingualBody){
-      while(size>minimum && !measuredSpec.fits(shown,size,inner,2))
-        size=Math.max(minimum,size-.5f);
+      float readableFloor=Math.max(minimum,preferred*.84f);
+      while(size>readableFloor && !measuredSpec.fits(shown,size,inner,2))
+        size=Math.max(readableFloor,size-.5f);
     }
     String reason=shown.isEmpty() && currentGuard!=null ? currentGuard.blankReason() : "";
 ''',
@@ -418,4 +454,4 @@ if language_hits != 1:
 ui_manifest_path.write_text(json.dumps(ui_manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 print("updated core provenance and intentional UI preservation hash")
-print("Bilingual v1.0.7 two-line + main-UI portrait-only patch applied.")
+print("Bilingual v1.0.8 readable two-line + main-UI portrait-only patch applied.")
