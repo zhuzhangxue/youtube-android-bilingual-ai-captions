@@ -48,7 +48,7 @@ replace_once(
 replace_once(
     "gradle.properties",
     "version=1.5.1\ncaptionBuildId=release-1.5.1\n",
-    "version=1.5.1-bilingual.1\ncaptionBuildId=bilingual-1.5.1-1\n",
+    "version=1.0.0\ncaptionBuildId=bilingual-1.0.0\n",
 )
 
 # Persistent setting.
