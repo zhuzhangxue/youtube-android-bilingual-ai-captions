@@ -1,6 +1,6 @@
 {
   "created_at": "2026-10-12T10:58:00",
-  "description": "v1.0.7 removes the old fullscreen-exit/player-state orientation hooks entirely. The only orientation rule left is: on phones, when YouTube's ordinary bottom navigation is visible, keep the main UI portrait; when it is hidden, stop controlling orientation. Includes compact two-line bilingual captions and default Simplified Chinese.",
+  "description": "v1.0.7 removes the earlier fullscreen-exit orientation hooks entirely. It no longer reacts to swipe-exit or the fullscreen back/collapse button. The only orientation behavior kept is: when YouTube's ordinary bottom navigation (pivot_bar) is visible on a phone, keep the main UI portrait; when that navigation disappears, release the orientation lock and let YouTube handle playback/fullscreen normally. Includes compact two-line bilingual captions and default Simplified Chinese.",
   "download_url": "https://raw.githubusercontent.com/zhuzhangxue/youtube-android-bilingual-ai-captions/dist/anchored-ai-captions-bilingual-1.0.7.mpp",
   "signature_download_url": "",
   "version": "1.0.7"
