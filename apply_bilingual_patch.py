@@ -48,7 +48,7 @@ replace_once(
 replace_once(
     "gradle.properties",
     "version=1.5.1\ncaptionBuildId=release-1.5.1\n",
-    "version=1.0.5\ncaptionBuildId=bilingual-1.0.5-portrait-exit-stable\n",
+    "version=1.0.6\ncaptionBuildId=bilingual-1.0.6-nav-visible-portrait\n",
 )
 
 # Add an independent patch that restores portrait orientation after leaving
@@ -60,8 +60,11 @@ write(
 
 import android.app.Activity;
 import android.content.pm.ActivityInfo;
+import android.content.res.Configuration;
 import android.os.Handler;
 import android.os.Looper;
+import android.view.View;
+import android.view.ViewTreeObserver;
 
 import java.lang.ref.WeakReference;
 
@@ -88,6 +91,41 @@ public final class RestorePortraitAfterFullscreen {
         wasFullscreen = false;
         portraitLockedByUs = false;
         epoch++;
+        installNavigationVisibilityGuard(activity);
+    }
+
+    private static void installNavigationVisibilityGuard(Activity activity) {
+        final View root = activity.getWindow().getDecorView();
+        final int pivotBarId = activity.getResources().getIdentifier(
+            "pivot_bar", "id", activity.getPackageName());
+        if (pivotBarId == 0) return;
+
+        root.getViewTreeObserver().addOnGlobalLayoutListener(
+            new ViewTreeObserver.OnGlobalLayoutListener() {
+                @Override
+                public void onGlobalLayout() {
+                    Activity current = activityRef.get();
+                    if (current != activity || current == null ||
+                        current.isFinishing() || current.isDestroyed() || isTablet(current)) return;
+
+                    View pivotBar = current.findViewById(pivotBarId);
+                    if (pivotBar == null || !pivotBar.isShown() ||
+                        pivotBar.getVisibility() != View.VISIBLE ||
+                        pivotBar.getAlpha() <= 0f) return;
+
+                    // The pivot bar is YouTube's ordinary Home / Shorts / Subscriptions /
+                    // Notifications / You navigation. It is not visible in fullscreen playback.
+                    // If that ordinary navigation is on screen, the phone UI should be portrait.
+                    if (current.getResources().getConfiguration().orientation ==
+                        Configuration.ORIENTATION_LANDSCAPE) {
+                        epoch++;
+                        wasFullscreen = false;
+                        current.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+                        portraitLockedByUs = true;
+                    }
+                }
+            }
+        );
     }
 
     private static boolean isTablet(Activity activity) {
@@ -442,4 +480,4 @@ if language_hits != 1:
 ui_manifest_path.write_text(json.dumps(ui_manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 print("updated core provenance and intentional UI preservation hash")
-print("Bilingual v1.0.5 two-line + stable portrait restore patch applied.")
+print("Bilingual v1.0.6 two-line + navigation-visible portrait restore patch applied.")
