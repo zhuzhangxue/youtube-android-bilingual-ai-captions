@@ -37,7 +37,7 @@ replace_once(
         website = "https://github.com/YYDarlinker/morphe-ai-caption-translator"
 ''',
     '''        name = "Anchored AI Captions Bilingual"
-        description = "Context-aware bilingual YouTube captions: original source plus AI translation"
+        description = "Context-aware bilingual YouTube captions: one source line plus one AI translation line"
         source = "https://github.com/zhuzhangxue/youtube-android-bilingual-ai-captions"
         author = "zhuzhangxue (bilingual fork) / YYDarlinker (upstream)"
         contact = "https://github.com/zhuzhangxue/youtube-android-bilingual-ai-captions/issues"
@@ -48,20 +48,16 @@ replace_once(
 replace_once(
     "gradle.properties",
     "version=1.5.1\ncaptionBuildId=release-1.5.1\n",
-    "version=1.0.2\ncaptionBuildId=bilingual-1.0.2-layout\n",
+    "version=1.0.3\ncaptionBuildId=bilingual-1.0.3-two-line\n",
 )
 
-# 1) Carry the exact source subtitle with each accepted translated display unit.
-# Translation itself remains completely upstream-owned: same context window, API call,
-# cache, validation and timing.
+# 1) Carry the exact source subtitle with each accepted translated unit.
 controller = "translation-core/src/main/java/app/yydarlinker/deepseekcaptions/RebuildController.java"
-
 replace_once(
     controller,
     '    String text = "";\n',
     '    String text = "", bilingualSourceText = "";\n    boolean bilingualTranslatedUnit = false;\n',
 )
-
 replace_once(
     controller,
     '''            text = unit.text;
@@ -72,7 +68,6 @@ replace_once(
             unitEvents = unit.events.size();
 ''',
 )
-
 replace_once(
     controller,
     '''            if(unit.blocked) {
@@ -86,7 +81,6 @@ replace_once(
                   && !bilingualSourceText.trim().isEmpty();
 ''',
 )
-
 replace_once(
     controller,
     '''      String signature = (status ? "status:" : "caption:") + eventId + "|" + text + "|";
@@ -98,9 +92,8 @@ replace_once(
 ''',
 )
 
-# 2) Keep a bilingual pair on one timed page whenever it can fit in four lines.
-# If even the minimum subtitle size cannot fit it, fall back to the translated half only
-# rather than paging source and translation separately.
+# 2) One source line + one translated line per timed page.
+# The pair is split proportionally inside the same accepted event. No extra API call is made.
 presentation = "translation-core/src/main/java/app/yydarlinker/deepseekcaptions/TranslationPresentation.java"
 replace_once(
     presentation,
@@ -110,97 +103,171 @@ replace_once(
     '''        TranslationBudget budget=new TranslationBudget(geometry.width,geometry.minimumPx,geometry.preferredPx,spec);
         int bilingualBreak=text==null?-1:text.indexOf('\\n');
         if(bilingualBreak>0 && bilingualBreak<text.length()-1){
-            float size=budget.preferredPx;
-            while(size>budget.minimumPx && !spec.fits(text,size,budget.width,4))
-                size=Math.max(budget.minimumPx,size-.5f);
-            if(spec.fits(text,size,budget.width,4)){
-                StaticLayout layout=spec.layout(text,size,budget.width);
-                int cut=layout.getLineCount()>1?layout.getLineEnd(0):text.length();
-                CaptionLinePlan line=new CaptionLinePlan(
-                    text,0,text.length(),cut,
-                    layout.getLineMax(0),
-                    layout.getLineCount()>1?layout.getLineMax(1):0,
-                    CaptionLinePlan.CutClass.LANGUAGE_BOUNDARY);
-                return Collections.singletonList(new CaptionDisplayPage(
-                    line.displayText,start,end,0,text.length(),
-                    "BILINGUAL_SOURCE_EVENT",line));
-            }
-            text=text.substring(bilingualBreak+1).trim();
+            String source=text.substring(0,bilingualBreak).trim();
+            String translated=text.substring(bilingualBreak+1).trim();
+            List<CaptionDisplayPage> bilingual=bilingualPages(source,translated,start,end,budget,spec);
+            if(!bilingual.isEmpty())return bilingual;
+            // If the event is too short to show a readable 1+1 pair, keep translation readable.
+            text=translated;
         }
         List<RebuildPageLayout.Page> planned=RebuildPageLayout.plan(text,start,end,budget,spec);
 ''',
 )
 
-# 3) Let the existing overlay render bilingual pages in up to four lines.
-# This deliberately does NOT add new views, settings classes or lifecycle hooks;
-# v1.0.0 did that and crashed on the user's device. Here we only widen the existing
-# TextView's line budget when the already-prepared display text is bilingual.
-overlay = "ui/src/main/java/app/yydarlinker/deepseekcaptions/CaptionOverlayV2.java"
+# Add compact bilingual page helpers before the class closing brace.
+replace_once(
+    presentation,
+    '''        if(!result.isEmpty()&&from!=text.length())throw new IllegalStateException("upstream_page_coverage");
+        return Collections.unmodifiableList(result);
+    }
+}
+''',
+    '''        if(!result.isEmpty()&&from!=text.length())throw new IllegalStateException("upstream_page_coverage");
+        return Collections.unmodifiableList(result);
+    }
 
+    private static List<CaptionDisplayPage> bilingualPages(String source,String translated,
+        long start,long end,TranslationBudget budget,CaptionRenderSpec spec){
+        if(source==null||translated==null||source.isEmpty()||translated.isEmpty()||end<=start)
+            return Collections.emptyList();
+        long duration=end-start;
+        int maxPages=(int)Math.max(1,Math.min(8,duration/900L));
+        for(int count=1;count<=maxPages;count++){
+            List<String> sources=balancedParts(source,count);
+            List<String> targets=balancedParts(translated,count);
+            if(sources.size()!=count||targets.size()!=count)continue;
+            List<Float> sizes=new ArrayList<>();
+            boolean ok=true;
+            for(int i=0;i<count;i++){
+                String pair=sources.get(i)+"\\n"+targets.get(i);
+                float size=largestFittingSize(pair,budget,spec);
+                if(size<0){ok=false;break;}
+                sizes.add(size);
+            }
+            if(!ok)continue;
+            List<CaptionDisplayPage> result=new ArrayList<>();
+            for(int i=0;i<count;i++){
+                String pair=sources.get(i)+"\\n"+targets.get(i);
+                float size=sizes.get(i);
+                StaticLayout layout=spec.layout(pair,size,budget.width);
+                if(layout.getLineCount()!=2) { ok=false; break; }
+                int cut=sources.get(i).length()+1;
+                CaptionLinePlan line=new CaptionLinePlan(
+                    pair,0,pair.length(),cut,
+                    layout.getLineMax(0),layout.getLineMax(1),
+                    CaptionLinePlan.CutClass.LANGUAGE_BOUNDARY);
+                long pageStart=start+(duration*i)/count;
+                long pageEnd=i==count-1?end:start+(duration*(i+1))/count;
+                result.add(new CaptionDisplayPage(
+                    line.displayText,pageStart,pageEnd,0,pair.length(),
+                    "BILINGUAL_ONE_PLUS_ONE",line));
+            }
+            if(ok&&!result.isEmpty())return Collections.unmodifiableList(result);
+        }
+        return Collections.emptyList();
+    }
+
+    private static float largestFittingSize(String pair,TranslationBudget budget,CaptionRenderSpec spec){
+        float size=budget.preferredPx;
+        while(size>budget.minimumPx && !spec.fits(pair,size,budget.width,2))
+            size=Math.max(budget.minimumPx,size-.5f);
+        return spec.fits(pair,size,budget.width,2)?size:-1;
+    }
+
+    private static List<String> balancedParts(String value,int count){
+        String text=value==null?"":value.trim();
+        if(count<=0||text.isEmpty())return Collections.emptyList();
+        if(count==1)return Collections.singletonList(text);
+        int codePoints=text.codePointCount(0,text.length());
+        if(codePoints<count)return Collections.emptyList();
+        List<String> result=new ArrayList<>();
+        int from=0;
+        java.text.BreakIterator breaks=java.text.BreakIterator.getLineInstance(Locale.ROOT);
+        breaks.setText(text);
+        for(int part=1;part<count;part++){
+            int targetCp=(int)Math.round(codePoints*(part/(double)count));
+            int target=text.offsetByCodePoints(0,targetCp);
+            int min=nextCodePoint(text,from);
+            int remaining=count-part;
+            int max=text.offsetByCodePoints(0,codePoints-remaining);
+            int cut=nearestLineBoundary(breaks,target,min,max);
+            if(cut<=from||cut>=text.length())return Collections.emptyList();
+            String piece=text.substring(from,cut).trim();
+            if(piece.isEmpty())return Collections.emptyList();
+            result.add(piece);
+            from=cut;
+            while(from<text.length()&&Character.isWhitespace(text.codePointAt(from)))
+                from+=Character.charCount(text.codePointAt(from));
+        }
+        String last=text.substring(from).trim();
+        if(last.isEmpty())return Collections.emptyList();
+        result.add(last);
+        return result;
+    }
+
+    private static int nextCodePoint(String text,int from){
+        if(from>=text.length())return text.length();
+        return from+Character.charCount(text.codePointAt(from));
+    }
+
+    private static int nearestLineBoundary(java.text.BreakIterator breaks,int target,int min,int max){
+        int before=breaks.preceding(Math.min(target+1,max+1));
+        int after=breaks.following(Math.max(target,min-1));
+        int best=-1;
+        if(before>=min&&before<=max)best=before;
+        if(after>=min&&after<=max&&(best<0||Math.abs(after-target)<Math.abs(best-target)))best=after;
+        if(best>=min&&best<=max)return best;
+        return Math.max(min,Math.min(max,target));
+    }
+}
+''',
+)
+
+# 3) Existing single TextView stays capped at two lines. For bilingual pages only,
+# shrink within Anchored's existing min/max size range until both lines fit.
+overlay = "ui/src/main/java/app/yydarlinker/deepseekcaptions/CaptionOverlayV2.java"
 replace_once(
     overlay,
     '''    String reason=shown.isEmpty() && currentGuard!=null ? currentGuard.blankReason() : "";
 ''',
     '''    boolean bilingualBody=ownedCaption && shown.indexOf('\\n')>=0;
-    int visibleMaxLines=bilingualBody?4:2;
     if(bilingualBody){
-      while(size>minimum && !measuredSpec.fits(shown,size,inner,visibleMaxLines))
+      while(size>minimum && !measuredSpec.fits(shown,size,inner,2))
         size=Math.max(minimum,size-.5f);
     }
     String reason=shown.isEmpty() && currentGuard!=null ? currentGuard.blankReason() : "";
 ''',
 )
 
+# 4) Fresh installs include Simplified Chinese in Auto-translate by default.
+languages = "ui/src/main/java/app/yydarlinker/deepseekcaptions/CaptionLanguageSelection.java"
 replace_once(
-    overlay,
-    '''    text.setTextSize(TypedValue.COMPLEX_UNIT_PX,size);
-    text.setSingleLine(false);text.setMaxLines(2);text.setEllipsize(null);
+    languages,
+    '''    static Set<String> read(Context c) {
+        if(c==null)return Collections.emptySet();
+        try{Set<String> raw=c.getSharedPreferences(STORE,Context.MODE_PRIVATE).getStringSet(KEY,Collections.emptySet());return normalize(new HashSet<>(raw));}
+        catch(IllegalArgumentException | ClassCastException invalid) { CaptionDiagnostics.mark(c,"LANGUAGE_SELECTION_INVALID","reason=unsupported_stored_code");return Collections.emptySet(); }
+    }
 ''',
-    '''    text.setTextSize(TypedValue.COMPLEX_UNIT_PX,size);
-    text.setSingleLine(false);text.setMaxLines(visibleMaxLines);text.setEllipsize(null);
+    '''    static Set<String> read(Context c) {
+        if(c==null)return Collections.singleton("zh-Hans");
+        try{
+            Set<String> raw=c.getSharedPreferences(STORE,Context.MODE_PRIVATE).getStringSet(KEY,null);
+            if(raw==null)return Collections.singleton("zh-Hans");
+            return normalize(new HashSet<>(raw));
+        }
+        catch(IllegalArgumentException | ClassCastException invalid) {
+            CaptionDiagnostics.mark(c,"LANGUAGE_SELECTION_INVALID","reason=unsupported_stored_code");
+            return Collections.singleton("zh-Hans");
+        }
+    }
 ''',
 )
 
-replace_once(
-    overlay,
-    '''  private static int applyVisibleText(TextView text,String shown,float size,int maximumInnerPx,CaptionRenderSpec spec,CaptionLinePlan line) {
-    boolean same=CaptionSettingPreference.sameText(text.getText(),shown)&&text.getTextSize()==size&&text.getPaint().equalsForTextMeasurement(spec.paint(size));
-    spec.apply(text);if(text.getTextSize()!=size)text.setTextSize(TypedValue.COMPLEX_UNIT_PX,size);if(!CaptionSettingPreference.sameText(text.getText(),shown))text.setText(shown);
-    if(text.getMaxLines()!=2){text.setSingleLine(false);text.setMaxLines(2);}if(text.getEllipsize()!=null)text.setEllipsize(null);
-''',
-    '''  private static int applyVisibleText(TextView text,String shown,float size,int maximumInnerPx,CaptionRenderSpec spec,CaptionLinePlan line) {
-    int maxLines=shown.indexOf('\\n')>=0?4:2;
-    boolean same=CaptionSettingPreference.sameText(text.getText(),shown)&&text.getTextSize()==size&&text.getPaint().equalsForTextMeasurement(spec.paint(size));
-    spec.apply(text);if(text.getTextSize()!=size)text.setTextSize(TypedValue.COMPLEX_UNIT_PX,size);if(!CaptionSettingPreference.sameText(text.getText(),shown))text.setText(shown);
-    if(text.getMaxLines()!=maxLines){text.setSingleLine(false);text.setMaxLines(maxLines);}if(text.getEllipsize()!=null)text.setEllipsize(null);
-''',
-)
-
-replace_once(
-    overlay,
-    '''    float contentWidthPx=line!=null?Math.max(line.line1Px,line.line2Px):same&&text.getLayout()!=null&&text.getLayout().getLineCount()==1?text.getLayout().getLineMax(0):spec.actualWidth(spec.layout(shown,size,maximumInnerPx));
-''',
-    '''    float contentWidthPx=maxLines>2?spec.actualWidth(spec.layout(shown,size,maximumInnerPx))
-        :line!=null?Math.max(line.line1Px,line.line2Px)
-        :same&&text.getLayout()!=null&&text.getLayout().getLineCount()==1?text.getLayout().getLineMax(0)
-        :spec.actualWidth(spec.layout(shown,size,maximumInnerPx));
-''',
-)
-
-text = read(overlay)
-needle = "spec.fits(shown,text.getLayout(),boxWidthPx-padding,2))return boxWidthPx;"
-count = text.count(needle)
-if count != 2:
-    raise SystemExit(f"{overlay}: expected 2 two-line fit checks, found {count}")
-write(overlay, text.replace(
-    needle,
-    "spec.fits(shown,text.getLayout(),boxWidthPx-padding,maxLines))return boxWidthPx;"
-))
-print("patched bilingual fit checks")
-
-# Keep upstream integration verification truthful after the intentional core adaptation.
+# Keep upstream integration verification truthful after intentional core/presentation adaptations.
 provenance_path = ROOT / "docs/core-provenance.json"
 provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+
 controller_sha = hashlib.sha256((ROOT / controller).read_bytes()).hexdigest()
 hits = 0
 for row in provenance.get("files", []):
@@ -221,4 +288,4 @@ if presentation_hits != 1:
 
 provenance_path.write_text(json.dumps(provenance, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 print("updated core provenance")
-print("Bilingual v1.0.2 layout patch applied.")
+print("Bilingual v1.0.3 two-line patch applied.")
