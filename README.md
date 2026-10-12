@@ -23,6 +23,33 @@ This isn't what I was getting at.
 - 生成包：`anchored-ai-captions-bilingual.mpp`
 - 双语字幕默认开启，也可以在 AI 字幕设置里的「双语字幕」开关关闭
 
+
+## 在 Morphe 里直接用 URL 添加
+
+现在这个仓库已经可以直接作为 **Morphe Remote Patch Source** 使用。
+
+在 Morphe Manager：
+
+1. Sources → +
+2. 选择 Remote
+3. 粘贴：
+
+```text
+https://github.com/zhuzhangxue/youtube-android-bilingual-ai-captions
+```
+
+4. 点 Add
+
+Morphe 会读取仓库根目录的 `patches-bundle.json`，自动下载当前稳定版 `.mpp`。以后版本更新时，也可以在 Sources 页面直接点 Update。
+
+也可以在 Android 浏览器直接打开这个一键添加链接：
+
+```text
+https://morphe.software/add-source?github=zhuzhangxue/youtube-android-bilingual-ai-captions
+```
+
+Morphe 会弹出确认添加补丁源的页面。
+
 ## 使用方式
 
 1. 在 Morphe Manager 中导入生成的 `.mpp`
