@@ -108,7 +108,7 @@ replace_once(
         List<RebuildPageLayout.Page> planned=RebuildPageLayout.plan(text,start,end,budget,spec);
 ''',
     '''        TranslationBudget budget=new TranslationBudget(geometry.width,geometry.minimumPx,geometry.preferredPx,spec);
-        int bilingualBreak=text==null?-1:text.indexOf('\n');
+        int bilingualBreak=text==null?-1:text.indexOf('\\n');
         if(bilingualBreak>0 && bilingualBreak<text.length()-1){
             float size=budget.preferredPx;
             while(size>budget.minimumPx && !spec.fits(text,size,budget.width,4))
@@ -141,7 +141,7 @@ replace_once(
     overlay,
     '''    String reason=shown.isEmpty() && currentGuard!=null ? currentGuard.blankReason() : "";
 ''',
-    '''    boolean bilingualBody=ownedCaption && shown.indexOf('\n')>=0;
+    '''    boolean bilingualBody=ownedCaption && shown.indexOf('\\n')>=0;
     int visibleMaxLines=bilingualBody?4:2;
     if(bilingualBody){
       while(size>minimum && !measuredSpec.fits(shown,size,inner,visibleMaxLines))
@@ -169,7 +169,7 @@ replace_once(
     if(text.getMaxLines()!=2){text.setSingleLine(false);text.setMaxLines(2);}if(text.getEllipsize()!=null)text.setEllipsize(null);
 ''',
     '''  private static int applyVisibleText(TextView text,String shown,float size,int maximumInnerPx,CaptionRenderSpec spec,CaptionLinePlan line) {
-    int maxLines=shown.indexOf('\n')>=0?4:2;
+    int maxLines=shown.indexOf('\\n')>=0?4:2;
     boolean same=CaptionSettingPreference.sameText(text.getText(),shown)&&text.getTextSize()==size&&text.getPaint().equalsForTextMeasurement(spec.paint(size));
     spec.apply(text);if(text.getTextSize()!=size)text.setTextSize(TypedValue.COMPLEX_UNIT_PX,size);if(!CaptionSettingPreference.sameText(text.getText(),shown))text.setText(shown);
     if(text.getMaxLines()!=maxLines){text.setSingleLine(false);text.setMaxLines(maxLines);}if(text.getEllipsize()!=null)text.setEllipsize(null);
