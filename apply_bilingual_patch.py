@@ -48,7 +48,7 @@ replace_once(
 replace_once(
     "gradle.properties",
     "version=1.5.1\ncaptionBuildId=release-1.5.1\n",
-    "version=1.0.4\ncaptionBuildId=bilingual-1.0.4-portrait-exit\n",
+    "version=1.0.5\ncaptionBuildId=bilingual-1.0.5-portrait-exit-stable\n",
 )
 
 # Add an independent patch that restores portrait orientation after leaving
@@ -118,15 +118,24 @@ public final class RestorePortraitAfterFullscreen {
         if (!wasFullscreen) return;
         wasFullscreen = false;
 
-        // Run after YouTube finishes processing the player-state callback so its
-        // own exit logic cannot immediately overwrite the portrait request.
-        MAIN.post(() -> {
+        // YouTube can write its own orientation again slightly after the player-state
+        // callback (notably when the top-left collapse/exit control is used). Re-assert
+        // portrait for a short bounded window. Any new fullscreen transition increments
+        // epoch and cancels these delayed corrections immediately.
+        enforcePortrait(activity, token, 0L);
+        enforcePortrait(activity, token, 90L);
+        enforcePortrait(activity, token, 260L);
+        enforcePortrait(activity, token, 650L);
+    }
+
+    private static void enforcePortrait(Activity activity, long token, long delayMs) {
+        MAIN.postDelayed(() -> {
             Activity current = activityRef.get();
             if (token != epoch || current != activity || current == null ||
                 current.isFinishing() || current.isDestroyed() || wasFullscreen) return;
             current.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
             portraitLockedByUs = true;
-        });
+        }, delayMs);
     }
 }
 '''
@@ -433,4 +442,4 @@ if language_hits != 1:
 ui_manifest_path.write_text(json.dumps(ui_manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 print("updated core provenance and intentional UI preservation hash")
-print("Bilingual v1.0.3 two-line patch applied.")
+print("Bilingual v1.0.5 two-line + stable portrait restore patch applied.")
