@@ -68,6 +68,23 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Publish raw bundle branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          rm -rf publish
+          git worktree add --detach publish
+          cd publish
+          git checkout --orphan dist-build
+          git rm -rf . >/dev/null 2>&1 || true
+          rm -rf ./* ./.github 2>/dev/null || true
+          cp ../out/anchored-ai-captions-bilingual.mpp "anchored-ai-captions-bilingual-$VERSION.mpp"
+          cp ../out/SHA256SUMS.txt .
+          git add .
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com"             commit -m "dist: bilingual captions $VERSION"
+          git push origin HEAD:dist --force
+
       - name: Publish stable GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
