@@ -72,3 +72,15 @@ AI 译文
 ## 上游与许可
 
 本项目基于 [YYDarlinker/morphe-ai-caption-translator](https://github.com/YYDarlinker/morphe-ai-caption-translator) 修改，遵循其 GPLv3 许可。
+
+
+## Morphe 安装界面一直停在“正在安装”
+
+部分 Android / 厂商 ROM 上，Morphe 的“系统安装程序”会先走 Android PackageInstaller Session。
+如果系统没有正常弹出确认界面，可以使用这两个办法：
+
+1. 直接点 Morphe 的「保存」，再从文件管理器点生成的 APK 安装。
+2. 在 Morphe → 设置 → 系统 → 默认安装程序 中选择「Play商店安装」。
+   这个选项仍然调用系统安装界面，只是把 Google Play 商店记录为安装来源；它不会真的从 Play 商店重新下载 APK。
+
+这个问题属于 Morphe Manager 的安装流程，与双语字幕补丁本身无关。
