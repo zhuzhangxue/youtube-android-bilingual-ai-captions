@@ -48,8 +48,136 @@ replace_once(
 replace_once(
     "gradle.properties",
     "version=1.5.1\ncaptionBuildId=release-1.5.1\n",
-    "version=1.0.3\ncaptionBuildId=bilingual-1.0.3-two-line\n",
+    "version=1.0.4\ncaptionBuildId=bilingual-1.0.4-portrait-exit\n",
 )
+
+# Add an independent patch that restores portrait orientation after leaving
+# fullscreen on phones. It is separate from the caption feature so it can be
+# enabled/disabled in Morphe like any other patch.
+write(
+    "application-host/src/main/java/app/yydarlinker/deepseekcaptions/RestorePortraitAfterFullscreen.java",
+    r'''package app.yydarlinker.deepseekcaptions;
+
+import android.app.Activity;
+import android.content.pm.ActivityInfo;
+import android.os.Handler;
+import android.os.Looper;
+
+import java.lang.ref.WeakReference;
+
+/**
+ * Keeps YouTube's ordinary UI in portrait after leaving a landscape fullscreen video.
+ * The lock is released at the beginning of the next fullscreen transition so YouTube's
+ * own fullscreen orientation logic remains authoritative.
+ */
+public final class RestorePortraitAfterFullscreen {
+    private static final String FULLSCREEN = "WATCH_WHILE_FULLSCREEN";
+    private static final String SLIDING_TO_FULLSCREEN =
+        "WATCH_WHILE_SLIDING_MAXIMIZED_FULLSCREEN";
+    private static final Handler MAIN = new Handler(Looper.getMainLooper());
+
+    private static WeakReference<Activity> activityRef = new WeakReference<>(null);
+    private static boolean wasFullscreen;
+    private static boolean portraitLockedByUs;
+    private static long epoch;
+
+    private RestorePortraitAfterFullscreen() {}
+
+    public static void setMainActivity(Activity activity) {
+        activityRef = new WeakReference<>(activity);
+        wasFullscreen = false;
+        portraitLockedByUs = false;
+        epoch++;
+    }
+
+    private static boolean isTablet(Activity activity) {
+        return activity.getResources().getConfiguration().smallestScreenWidthDp >= 600;
+    }
+
+    public static void onPlayerType(Enum<?> playerType) {
+        if (playerType == null) return;
+        Activity activity = activityRef.get();
+        if (activity == null || activity.isFinishing() || activity.isDestroyed() || isTablet(activity)) return;
+
+        String name = playerType.name();
+        boolean fullscreen = FULLSCREEN.equals(name) || SLIDING_TO_FULLSCREEN.equals(name);
+        final long token = ++epoch;
+
+        if (fullscreen) {
+            wasFullscreen = true;
+            // This hook runs at the beginning of YouTube's player-state callback.
+            // Release our portrait lock first, then let YouTube's original callback
+            // choose its normal fullscreen orientation.
+            if (portraitLockedByUs) {
+                portraitLockedByUs = false;
+                activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+            }
+            return;
+        }
+
+        if (!wasFullscreen) return;
+        wasFullscreen = false;
+
+        // Run after YouTube finishes processing the player-state callback so its
+        // own exit logic cannot immediately overwrite the portrait request.
+        MAIN.post(() -> {
+            Activity current = activityRef.get();
+            if (token != epoch || current != activity || current == null ||
+                current.isFinishing() || current.isDestroyed() || wasFullscreen) return;
+            current.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+            portraitLockedByUs = true;
+        });
+    }
+}
+'''
+)
+
+write(
+    "patches/src/main/kotlin/app/yydarlinker/patches/deepseekcaptions/RestorePortraitAfterFullscreenPatch.kt",
+    r'''package app.yydarlinker.patches.deepseekcaptions
+
+import app.morphe.patcher.Fingerprint
+import app.morphe.patcher.extensions.InstructionExtensions.addInstruction
+import app.morphe.patcher.patch.bytecodePatch
+import app.yydarlinker.patches.shared.Constants.YOUTUBE
+import com.android.tools.smali.dexlib2.AccessFlags
+
+private const val RESTORE_PORTRAIT_EXTENSION_CLASS =
+    "Lapp/yydarlinker/deepseekcaptions/RestorePortraitAfterFullscreen;"
+
+@Suppress("unused")
+val restorePortraitAfterFullscreenPatch = bytecodePatch(
+    name = "Restore portrait after fullscreen",
+    description = "Returns the YouTube interface to portrait after leaving a fullscreen video on phones.",
+    default = true,
+) {
+    compatibleWith(YOUTUBE)
+    // This dependency installs the shared extension MPE that contains the runtime helper.
+    dependsOn(captionSupportPatch)
+
+    execute {
+        YouTubeActivityOnCreateFingerprint.method.addInstruction(
+            0,
+            "invoke-static/range { p0 .. p0 }, " +
+                "$RESTORE_PORTRAIT_EXTENSION_CLASS->setMainActivity(Landroid/app/Activity;)V",
+        )
+
+        Fingerprint(
+            definingClass = "/YouTubePlayerOverlaysLayout;",
+            accessFlags = listOf(AccessFlags.PUBLIC, AccessFlags.FINAL),
+            returnType = "V",
+            parameters = listOf(PlayerTypeEnumFingerprint.originalClassDef.type),
+        ).method.addInstruction(
+            0,
+            "invoke-static { p1 }, " +
+                "$RESTORE_PORTRAIT_EXTENSION_CLASS->onPlayerType(Ljava/lang/Enum;)V",
+        )
+    }
+}
+'''
+)
+
+print("added Restore portrait after fullscreen patch")
 
 # 1) Carry the exact source subtitle with each accepted translated unit.
 controller = "translation-core/src/main/java/app/yydarlinker/deepseekcaptions/RebuildController.java"
