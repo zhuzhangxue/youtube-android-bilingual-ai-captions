@@ -12,6 +12,10 @@ permissions:
   contents: write
   packages: read
 
+concurrency:
+  group: bilingual-captions-publish
+  cancel-in-progress: true
+
 env:
   UPSTREAM_TAG: v1.5.1
   VERSION: 1.0.4
