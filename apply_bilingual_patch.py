@@ -38,10 +38,10 @@ replace_once(
 ''',
     '''        name = "Anchored AI Captions Bilingual"
         description = "Context-aware bilingual YouTube captions: original source plus AI translation"
-        source = "https://github.com/zhuzhangxue/youtube-android-double-translated_titles"
+        source = "https://github.com/zhuzhangxue/youtube-android-bilingual-ai-captions"
         author = "zhuzhangxue (bilingual fork) / YYDarlinker (upstream)"
-        contact = "https://github.com/zhuzhangxue/youtube-android-double-translated_titles/issues"
-        website = "https://github.com/zhuzhangxue/youtube-android-double-translated_titles"
+        contact = "https://github.com/zhuzhangxue/youtube-android-bilingual-ai-captions/issues"
+        website = "https://github.com/zhuzhangxue/youtube-android-bilingual-ai-captions"
 '''
 )
 
