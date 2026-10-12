@@ -224,7 +224,7 @@ replace_once(
   }
 
   private static String bilingualText(String translation, String source) {
-    return source == null || source.isEmpty() ? translation : source + "\n" + translation;
+    return source == null || source.isEmpty() ? translation : source + "\\n" + translation;
   }
 ''',
 )
