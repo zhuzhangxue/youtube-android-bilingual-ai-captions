@@ -287,5 +287,22 @@ if presentation_hits != 1:
     raise SystemExit(f"expected one provenance row for TranslationPresentation, found {presentation_hits}")
 
 provenance_path.write_text(json.dumps(provenance, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-print("updated core provenance")
+
+# This fork intentionally changes one UI preference default, so update the upstream
+# preservation manifest for that single file while leaving every other protected UI file exact.
+ui_manifest_path = ROOT / "docs/ui-preservation.json"
+ui_manifest = json.loads(ui_manifest_path.read_text(encoding="utf-8"))
+language_path = languages
+language_bytes = (ROOT / language_path).read_bytes()
+language_hits = 0
+for row in ui_manifest.get("files", []):
+    if row.get("path") == language_path:
+        row["sha256"] = hashlib.sha256(language_bytes).hexdigest()
+        row["bytes"] = len(language_bytes)
+        language_hits += 1
+if language_hits != 1:
+    raise SystemExit(f"expected one UI preservation row for CaptionLanguageSelection, found {language_hits}")
+ui_manifest_path.write_text(json.dumps(ui_manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+print("updated core provenance and intentional UI preservation hash")
 print("Bilingual v1.0.3 two-line patch applied.")
