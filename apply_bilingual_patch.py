@@ -304,7 +304,7 @@ replace_once(
                   ? FAILED
                   : WAITING;
           long delay = e instanceof RebuildApi.Failure ? ((RebuildApi.Failure) e).delay : 0;
-          s.retryAt[job.index] = android.os.SystemClock.elapsedRealtime() + Math.max(1200, delay);
+          s.retryAt[job.index] = SystemClock.elapsedRealtime() + Math.max(1200, delay);
 ''',
     '''          boolean transientRetry =
               s.plans[job.index] == null
@@ -325,7 +325,7 @@ replace_once(
                   ? FAILED
                   : WAITING;
           long delay = e instanceof RebuildApi.Failure ? ((RebuildApi.Failure) e).delay : 0;
-          s.retryAt[job.index] = android.os.SystemClock.elapsedRealtime()
+          s.retryAt[job.index] = SystemClock.elapsedRealtime()
               + Math.max(transientRetry ? 700 : 1200, delay);
 ''',
 )
@@ -361,6 +361,18 @@ replace_once(
 )
 
 api = "translation-core/src/main/java/app/yydarlinker/deepseekcaptions/RebuildApi.java"
+replace_once(
+    api,
+    '''package app.yydarlinker.deepseekcaptions;
+
+import java.io.*;
+''',
+    '''package app.yydarlinker.deepseekcaptions;
+
+import android.os.SystemClock;
+import java.io.*;
+''',
+)
 replace_once(
     api,
     '''    JSONObject payload = RebuildProtocol.payload(s, b, lang, repair,context);
@@ -467,7 +479,7 @@ replace_once(
     RebuildController.Job job=(RebuildController.Job)control;
     String key=bilingualContextKey(s,cfg,lang,context,control);
     if(!bilingualExistingContext(s,cfg,lang,context,control).isEmpty())return;
-    long now=android.os.SystemClock.elapsedRealtime();
+    long now=SystemClock.elapsedRealtime();
     Long retry=BILINGUAL_CONTEXT_RETRY.get(key);
     if(retry!=null&&retry>now)return;
     if(!BILINGUAL_CONTEXT_LOADING.add(key))return;
@@ -504,7 +516,7 @@ replace_once(
             java.nio.file.StandardCopyOption.REPLACE_EXISTING,
             java.nio.file.StandardCopyOption.ATOMIC_MOVE);
       } catch(Exception ignored) {
-        BILINGUAL_CONTEXT_RETRY.put(key,android.os.SystemClock.elapsedRealtime()+30000);
+        BILINGUAL_CONTEXT_RETRY.put(key,SystemClock.elapsedRealtime()+30000);
       } finally {
         BILINGUAL_CONTEXT_LOADING.remove(key);
       }
@@ -599,7 +611,7 @@ replace_once(
           s.reasons[job.index]="";
           s.jobs[job.index]=null;
           s.everReady=true;
-          if(job.priority&&s.focusAcceptedAt<0)s.focusAcceptedAt=android.os.SystemClock.elapsedRealtime();
+          if(job.priority&&s.focusAcceptedAt<0)s.focusAcceptedAt=SystemClock.elapsedRealtime();
         }
         notice(notices,"BILINGUAL_RESCUE_READY",
             "session="+s.id+";block="+b.index+";after_attempts="+s.attempts[job.index]);
