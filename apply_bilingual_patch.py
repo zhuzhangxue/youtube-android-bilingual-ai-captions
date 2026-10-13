@@ -48,7 +48,7 @@ replace_once(
 replace_once(
     "gradle.properties",
     "version=1.5.1\ncaptionBuildId=release-1.5.1\n",
-    "version=1.1.0\ncaptionBuildId=bilingual-1.1.0-resilient-retry\n",
+    "version=1.2.0\ncaptionBuildId=bilingual-1.2.0-rescue-pipeline\n",
 )
 
 # Add an independent patch that restores portrait orientation after leaving
@@ -330,6 +330,154 @@ replace_once(
 ''',
 )
 
+
+# 1b) Rescue strict protocol failures with a much simpler one-field JSON response.
+replace_once(
+    controller,
+    '''  private static void render(Session s) {
+''',
+    '''  private static boolean bilingualProtocolRescue(String reason) {
+    if (reason == null || reason.isEmpty()) return false;
+    String code = reason;
+    int cut = code.indexOf(';');
+    if (cut >= 0) code = code.substring(0, cut);
+    return code.equals("json")
+        || code.equals("source_quote_mismatch")
+        || code.equals("source_coverage")
+        || code.equals("missing_source")
+        || code.equals("crosses_source_break")
+        || code.equals("block_identity")
+        || code.equals("source_quote_required")
+        || code.equals("event_count")
+        || code.equals("event_shape")
+        || code.equals("index_type")
+        || code.equals("text_type")
+        || code.equals("protocol_leak")
+        || code.equals("output_truncated");
+  }
+
+  private static void render(Session s) {
+''',
+)
+
+api = "translation-core/src/main/java/app/yydarlinker/deepseekcaptions/RebuildApi.java"
+replace_once(
+    api,
+    '''  private static void trace(DeepSeekApiClient.RequestControl control,String stage,String detail) {
+''',
+    '''  /**
+   * Last-resort protocol rescue. The provider only has to return one translated string.
+   * Source ownership, timing and the final event JSON are rebuilt locally.
+   */
+  static RebuildProtocol.Plan rescueSimple(RebuildSource s, RebuildPlanner.Block b,
+      TranslationSettings cfg, String lang, DeepSeekApiClient.RequestControl control,
+      boolean priority, CaptionLanguageContext context) throws Exception {
+    JSONObject payload = new JSONObject()
+        .put("language", context.canApplyEnglishToChinese ? lang : context.targetCode)
+        .put("source_text", s.text(b.from,b.to))
+        .put("context_before", RebuildPlanner.context(s,b.from-24,b.from-1))
+        .put("context_after", RebuildPlanner.context(s,b.to+1,b.to+24))
+        .put("instruction",
+            "Translate source_text faithfully. Context is read-only. Return only a JSON object with one string field named text.");
+    String rescuePrompt =
+        "Translate only source_text into the selected target language. Preserve meaning, names, numbers, negation and technical terms. "
+        + "Use context only to resolve meaning. Do not summarize. Return exactly {\\\"text\\\":\\\"translation\\\"}.";
+    JSONObject request = ProviderRequestPolicy.request(
+        cfg,rescuePrompt,payload,Math.min(1800,Math.max(500,s.text(b.from,b.to).length()*2+300)));
+    request.put("stream",false);
+    request.put("response_format",new JSONObject().put("type","json_object"));
+    long deadline = System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(priority?9000:13000);
+    Response response=send(cfg,request.toString(),control,deadline,null);
+    if ((response.status==400||response.status==422)&&ProviderRequestPolicy.inspected(response.body))
+      throw new Failure(ProviderRequestPolicy.INSPECTION_CODE,false,0);
+    if(response.status<200||response.status>=300)
+      throw new Failure("http_"+response.status,
+          response.status==401||response.status==403||response.status==404,response.retryAfter);
+    JSONObject root=new JSONObject(response.body);
+    JSONObject choice=root.getJSONArray("choices").getJSONObject(0);
+    String finish=choice.optString("finish_reason");
+    if("length".equals(finish))throw new RebuildProtocol.Invalid("output_truncated");
+    if("content_filter".equals(finish))throw new Failure("content_filter",false,0);
+    String raw=choice.getJSONObject("message").optString("content","").trim();
+    JSONObject answer=new JSONObject(raw);
+    String text=answer.optString("text","").replace('\\r',' ').replace('\\n',' ').trim();
+    if(text.isEmpty())throw new RebuildProtocol.Invalid("empty_translation");
+
+    JSONObject event=new JSONObject()
+        .put("from",b.from).put("to",b.to)
+        .put("source",s.text(b.from,b.to)).put("text",text);
+    JSONObject local=new JSONObject().put("block",b.id())
+        .put("events",new JSONArray().put(event));
+    RebuildProtocol.Plan plan=RebuildProtocol.parseBound(local.toString(),s,b,context);
+    trace(control,"BILINGUAL_RESCUE_ACCEPTED",
+        "block="+b.index+";range="+b.from+"-"+b.to+";mode=simple_local_ownership");
+    return plan;
+  }
+
+  private static void trace(DeepSeekApiClient.RequestControl control,String stage,String detail) {
+''',
+)
+
+replace_once(
+    controller,
+    '''      String redactedReason = TranslationRuntime.redact(rejectionReason, s.config.apiKey, 400);
+      notices.clear();
+      synchronized (s) {
+''',
+    '''      String redactedReason = TranslationRuntime.redact(rejectionReason, s.config.apiKey, 400);
+      boolean filteredFailure =
+          e instanceof RebuildApi.Failure && "content_filter".equals(((RebuildApi.Failure)e).code);
+      RebuildProtocol.Plan rescued = null;
+      if (!fatal && !filteredFailure && s.plans[job.index] == null
+          && s.attempts[job.index] >= 2 && bilingualProtocolRescue(code)) {
+        try {
+          rescued=RebuildApi.rescueSimple(
+              s.source,b,s.config,s.target,job,job.priority,s.languageContext);
+        } catch (Exception rescueFailure) {
+          String rescueCode=rescueFailure instanceof RebuildProtocol.Invalid
+              ? ((RebuildProtocol.Invalid)rescueFailure).code
+              : rescueFailure instanceof RebuildApi.Failure
+                  ? ((RebuildApi.Failure)rescueFailure).code
+                  : rescueFailure instanceof RebuildApi.TransportFailure
+                      ? ((RebuildApi.TransportFailure)rescueFailure).reason
+                      : rescueFailure.getClass().getSimpleName();
+          notice(notices,"BILINGUAL_RESCUE_REJECTED",
+              "session="+s.id+";block="+b.index+";reason="+rescueCode);
+        }
+      }
+      if (rescued != null) {
+        synchronized (s) {
+          if (!current(s) || s.jobs[job.index] != job || job.cancelled) return;
+          s.plans[job.index]=rescued;
+          if(s.provisional!=null)s.provisional[job.index]=null;
+          s.states[job.index]=READY;
+          s.reasons[job.index]="";
+          s.jobs[job.index]=null;
+          s.everReady=true;
+          if(job.priority&&s.focusAcceptedAt<0)s.focusAcceptedAt=SystemClock.elapsedRealtime();
+        }
+        notice(notices,"BILINGUAL_RESCUE_READY",
+            "session="+s.id+";block="+b.index+";after_attempts="+s.attempts[job.index]);
+        flush(s,notices);
+        render(s);
+        return;
+      }
+      notices.clear();
+      synchronized (s) {
+''',
+)
+
+replace_once(
+    controller,
+    '''          boolean filtered =
+              e instanceof RebuildApi.Failure
+                  && "content_filter".equals(((RebuildApi.Failure) e).code);
+''',
+    '''          boolean filtered = filteredFailure;
+''',
+)
+
+
 # 2) One source line + one translated line per timed page.
 # The pair is split proportionally inside the same accepted event. No extra API call is made.
 presentation = "translation-core/src/main/java/app/yydarlinker/deepseekcaptions/TranslationPresentation.java"
@@ -551,6 +699,15 @@ for row in provenance.get("files", []):
 if hits != 1:
     raise SystemExit(f"expected one provenance row for RebuildController, found {hits}")
 
+api_sha = hashlib.sha256((ROOT / api).read_bytes()).hexdigest()
+api_hits = 0
+for row in provenance.get("files", []):
+    if row.get("destination") == api:
+        row["sha256"] = api_sha
+        api_hits += 1
+if api_hits != 1:
+    raise SystemExit(f"expected one provenance row for RebuildApi, found {api_hits}")
+
 presentation_sha = hashlib.sha256((ROOT / presentation).read_bytes()).hexdigest()
 presentation_hits = 0
 for row in provenance.get("new_files", []):
@@ -579,4 +736,4 @@ if language_hits != 1:
 ui_manifest_path.write_text(json.dumps(ui_manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 print("updated core provenance and intentional UI preservation hash")
-print("Bilingual v1.1.0 readable two-line + resilient retry + source fallback + main-UI portrait-only patch applied.")
+print("Bilingual v1.2.0 rescue pipeline + readable two-line + source fallback + main-UI portrait-only patch applied.")
