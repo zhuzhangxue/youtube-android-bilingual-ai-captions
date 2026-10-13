@@ -48,7 +48,7 @@ replace_once(
 replace_once(
     "gradle.properties",
     "version=1.5.1\ncaptionBuildId=release-1.5.1\n",
-    "version=1.0.8\ncaptionBuildId=bilingual-1.0.8-readable-two-line\n",
+    "version=1.0.9\ncaptionBuildId=bilingual-1.0.9-source-fallback\n",
 )
 
 # Add an independent patch that restores portrait orientation after leaving
@@ -188,7 +188,9 @@ replace_once(
             } else {
 ''',
     '''            if(unit.blocked) {
-              text="";eventId="source:"+eventId;fallbackReason="event_review";
+              text=bilingualSourceText==null ? "" : bilingualSourceText.trim();
+              eventId="source:"+eventId;
+              fallbackReason="event_review";
             } else {
               bilingualTranslatedUnit = !text.isEmpty() && bilingualSourceText != null
                   && !bilingualSourceText.trim().isEmpty();
@@ -202,6 +204,22 @@ replace_once(
         text = bilingualSourceText.trim() + "\\n" + text;
       }
       String signature = (status ? "status:" : "caption:") + eventId + "|" + text + "|";
+''',
+)
+
+replace_once(
+    controller,
+    '''              if(eventStart<=selectedAt && selectedAt<eventEnd) {
+                text=s.states[i]==FAILED ? "" : translating;
+                eventId="source:"+i+":"+eventStart+"_"+eventEnd;
+              }
+''',
+    '''              if(eventStart<=selectedAt && selectedAt<eventEnd) {
+                // If the AI block ultimately fails, keep the source caption visible rather
+                // than turning a known caption window into a blank gap.
+                text=s.states[i]==FAILED ? cue.text : translating;
+                eventId="source:"+i+":"+eventStart+"_"+eventEnd;
+              }
 ''',
 )
 
@@ -454,4 +472,4 @@ if language_hits != 1:
 ui_manifest_path.write_text(json.dumps(ui_manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 print("updated core provenance and intentional UI preservation hash")
-print("Bilingual v1.0.8 readable two-line + main-UI portrait-only patch applied.")
+print("Bilingual v1.0.9 readable two-line + source fallback + main-UI portrait-only patch applied.")
