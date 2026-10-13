@@ -48,7 +48,7 @@ replace_once(
 replace_once(
     "gradle.properties",
     "version=1.5.1\ncaptionBuildId=release-1.5.1\n",
-    "version=1.0.9\ncaptionBuildId=bilingual-1.0.9-source-fallback\n",
+    "version=1.0.10\ncaptionBuildId=bilingual-1.0.10-resilient-retry\n",
 )
 
 # Add an independent patch that restores portrait orientation after leaving
@@ -217,9 +217,116 @@ replace_once(
     '''              if(eventStart<=selectedAt && selectedAt<eventEnd) {
                 // If the AI block ultimately fails, keep the source caption visible rather
                 // than turning a known caption window into a blank gap.
-                text=s.states[i]==FAILED ? cue.text : translating;
+                boolean retryingTransient =
+                    s.attempts[i] >= 2 && bilingualTransientRetry(s.reasons[i]);
+                text=(s.states[i]==FAILED || retryingTransient) ? cue.text : translating;
                 eventId="source:"+i+":"+eventStart+"_"+eventEnd;
               }
+''',
+)
+
+replace_once(
+    controller,
+    '''  static String unresolvedPhase(int state, String reason) {
+    if (state == READY) return "";
+    return state == FAILED ? "failed:" + reason : "pending_translation";
+  }
+
+''',
+    '''  static String unresolvedPhase(int state, String reason) {
+    if (state == READY) return "";
+    return state == FAILED ? "failed:" + reason : "pending_translation";
+  }
+
+  // Provider/network failures are often intermittent. A fresh subtitle toggle succeeding on the
+  // same source range is exactly this case, so allow two extra bounded attempts for transient
+  // failures without retrying configuration/content-filter failures forever.
+  private static boolean bilingualTransientRetry(String reason) {
+    if (reason == null || reason.isEmpty()) return false;
+    String code = reason;
+    int cut = code.indexOf(';');
+    if (cut >= 0) code = code.substring(0, cut);
+    return code.equals("deadline_expired")
+        || code.equals("connection_establishment_timeout")
+        || code.equals("connection_establishment_failed")
+        || code.equals("connection_socket_exception")
+        || code.equals("read_interrupted")
+        || code.equals("JSONException")
+        || code.equals("output_truncated")
+        || code.equals("negotiation_pending")
+        || code.equals("http_408")
+        || code.equals("http_409")
+        || code.equals("http_425")
+        || code.equals("http_429")
+        || code.startsWith("http_5");
+  }
+
+''',
+)
+
+replace_once(
+    controller,
+    '''        int maxAttempts =
+            RebuildReview.hasSemanticRepairRisk(s.plans[i])
+                ? RebuildReview.MAX_SEMANTIC_ATTEMPTS
+                : s.attempts[i] == 2
+                        && s.plans[i] == null
+                        && RebuildReview.structuralRetry(s.reasons[i])
+                        && s.repairCount < RebuildReview.MAX_SESSION_REPAIRS
+                    ? 3
+                    : 2;
+''',
+    '''        int maxAttempts =
+            RebuildReview.hasSemanticRepairRisk(s.plans[i])
+                ? RebuildReview.MAX_SEMANTIC_ATTEMPTS
+                : s.plans[i] == null && bilingualTransientRetry(s.reasons[i])
+                    ? 4
+                    : s.attempts[i] == 2
+                            && s.plans[i] == null
+                            && RebuildReview.structuralRetry(s.reasons[i])
+                            && s.repairCount < RebuildReview.MAX_SESSION_REPAIRS
+                        ? 3
+                        : 2;
+''',
+)
+
+replace_once(
+    controller,
+    '''          boolean structuralRetry =
+              s.plans[job.index] == null
+                  && s.attempts[job.index] < 3
+                  && RebuildReview.structuralRetry(code)
+                  && s.repairCount < RebuildReview.MAX_SESSION_REPAIRS;
+          s.states[job.index] =
+              fatal || filtered || (!structuralRetry && s.attempts[job.index] >= 2)
+                  || s.attempts[job.index] >= 3
+                  || s.repairCount >= RebuildReview.MAX_SESSION_REPAIRS
+                  ? FAILED
+                  : WAITING;
+          long delay = e instanceof RebuildApi.Failure ? ((RebuildApi.Failure) e).delay : 0;
+          s.retryAt[job.index] = SystemClock.elapsedRealtime() + Math.max(1200, delay);
+''',
+    '''          boolean transientRetry =
+              s.plans[job.index] == null
+                  && s.attempts[job.index] < 4
+                  && bilingualTransientRetry(code)
+                  && s.repairCount < RebuildReview.MAX_SESSION_REPAIRS;
+          boolean structuralRetry =
+              s.plans[job.index] == null
+                  && s.attempts[job.index] < 3
+                  && RebuildReview.structuralRetry(code)
+                  && s.repairCount < RebuildReview.MAX_SESSION_REPAIRS;
+          boolean retryable = transientRetry || structuralRetry;
+          int hardAttemptLimit = transientRetry ? 4 : 3;
+          s.states[job.index] =
+              fatal || filtered || (!retryable && s.attempts[job.index] >= 2)
+                  || s.attempts[job.index] >= hardAttemptLimit
+                  || s.repairCount >= RebuildReview.MAX_SESSION_REPAIRS
+                  ? FAILED
+                  : WAITING;
+          long delay = e instanceof RebuildApi.Failure ? ((RebuildApi.Failure) e).delay : 0;
+          s.retryAt[job.index] = SystemClock.elapsedRealtime()
+              + Math.max(transientRetry ? 700 : 1200, delay);
 ''',
 )
 
@@ -472,4 +579,4 @@ if language_hits != 1:
 ui_manifest_path.write_text(json.dumps(ui_manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 print("updated core provenance and intentional UI preservation hash")
-print("Bilingual v1.0.9 readable two-line + source fallback + main-UI portrait-only patch applied.")
+print("Bilingual v1.0.10 readable two-line + resilient retry + source fallback + main-UI portrait-only patch applied.")
