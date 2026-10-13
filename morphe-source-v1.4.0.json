@@ -1,0 +1,7 @@
+{
+  "created_at": "2026-10-13T01:20:00",
+  "description": "v1.4.0 cumulative checkpoint. Includes v1.2.0 reliability rescue and v1.3.0 whole-video context. Adds low-latency safeguards: immediate foreground protocol rescue, 45-second look-ahead prefetch, delayed background context-card analysis, and an explicit build guard that keeps the normal 160-word / 1600-character / 30-second block ceilings and 6s/14s planning targets unchanged.",
+  "download_url": "https://github.com/zhuzhangxue/youtube-android-bilingual-ai-captions/releases/download/v1.4.0/anchored-ai-captions-bilingual.mpp",
+  "signature_download_url": "",
+  "version": "1.4.0"
+}
