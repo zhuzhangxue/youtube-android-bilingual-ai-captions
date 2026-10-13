@@ -48,7 +48,7 @@ replace_once(
 replace_once(
     "gradle.properties",
     "version=1.5.1\ncaptionBuildId=release-1.5.1\n",
-    "version=1.0.10\ncaptionBuildId=bilingual-1.0.10-resilient-retry\n",
+    "version=1.1.0\ncaptionBuildId=bilingual-1.1.0-resilient-retry\n",
 )
 
 # Add an independent patch that restores portrait orientation after leaving
@@ -579,4 +579,4 @@ if language_hits != 1:
 ui_manifest_path.write_text(json.dumps(ui_manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 print("updated core provenance and intentional UI preservation hash")
-print("Bilingual v1.0.10 readable two-line + resilient retry + source fallback + main-UI portrait-only patch applied.")
+print("Bilingual v1.1.0 readable two-line + resilient retry + source fallback + main-UI portrait-only patch applied.")
