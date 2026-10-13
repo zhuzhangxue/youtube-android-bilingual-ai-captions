@@ -686,6 +686,17 @@ replace_once(
 ''',
 )
 
+# RebuildApi intentionally adds a bilingual rescue request/prompt in this fork.
+# Keep the upstream literal-integrity check for RebuildProtocol, but do not claim RebuildApi literals are untouched.
+verify_integration = "tools/verify_integration.py"
+replace_once(
+    verify_integration,
+    '''    for name in ['RebuildApi','RebuildProtocol']:
+''',
+    '''    for name in ['RebuildProtocol']:
+''',
+)
+
 # Keep upstream integration verification truthful after intentional core/presentation adaptations.
 provenance_path = ROOT / "docs/core-provenance.json"
 provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
