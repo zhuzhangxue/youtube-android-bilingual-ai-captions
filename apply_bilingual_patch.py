@@ -48,7 +48,7 @@ replace_once(
 replace_once(
     "gradle.properties",
     "version=1.5.1\ncaptionBuildId=release-1.5.1\n",
-    "version=1.2.0\ncaptionBuildId=bilingual-1.2.0-rescue-pipeline\n",
+    "version=1.3.0\ncaptionBuildId=bilingual-1.3.0-video-context\n",
 )
 
 # Add an independent patch that restores portrait orientation after leaving
@@ -363,22 +363,166 @@ replace_once(
 api = "translation-core/src/main/java/app/yydarlinker/deepseekcaptions/RebuildApi.java"
 replace_once(
     api,
+    '''    JSONObject payload = RebuildProtocol.payload(s, b, lang, repair,context);
+    TranslationBudget layout = TranslationOutput.budget();
+''',
+    '''    JSONObject payload = RebuildProtocol.payload(s, b, lang, repair,context);
+    String videoContextCard=bilingualExistingContext(s,cfg,lang,context,control);
+    if(!videoContextCard.isEmpty())payload.put("video_context_card",videoContextCard);
+    TranslationBudget layout = TranslationOutput.budget();
+''',
+)
+replace_once(
+    api,
+    '''    String prompt = prompt(cfg, lang,context);
+''',
+    '''    String prompt = prompt(cfg, lang,context);
+    if(!videoContextCard.isEmpty())
+      prompt += " video_context_card is read-only global video context. Use it for terminology and reference resolution, but translate only source_text.";
+''',
+)
+replace_once(
+    api,
+    '''        TranslationAudit.recordUnitBatchOutcome(audit, 1);
+        return plan;
+''',
+    '''        TranslationAudit.recordUnitBatchOutcome(audit, 1);
+        bilingualMaybeBuildContext(s,cfg,lang,context,control);
+        return plan;
+''',
+)
+
+replace_once(
+    api,
     '''  private static void trace(DeepSeekApiClient.RequestControl control,String stage,String detail) {
 ''',
     '''  /**
    * Last-resort protocol rescue. The provider only has to return one translated string.
    * Source ownership, timing and the final event JSON are rebuilt locally.
    */
+  private static final ConcurrentHashMap<String,String> BILINGUAL_VIDEO_CONTEXT =
+      new ConcurrentHashMap<>();
+  private static final ConcurrentHashMap<String,Long> BILINGUAL_CONTEXT_RETRY =
+      new ConcurrentHashMap<>();
+  private static final Set<String> BILINGUAL_CONTEXT_LOADING = ConcurrentHashMap.newKeySet();
+  private static final ExecutorService BILINGUAL_CONTEXT_IO =
+      Executors.newSingleThreadExecutor(r -> {
+        Thread t=new Thread(r,"BilingualVideoContextIO");t.setDaemon(true);return t;
+      });
+
+  private static String bilingualContextKey(RebuildSource s, TranslationSettings cfg, String lang,
+      CaptionLanguageContext context, DeepSeekApiClient.RequestControl control) {
+    if(control instanceof RebuildController.Job) {
+      RebuildController.Job job=(RebuildController.Job)control;
+      if(job.session.cacheKey!=null&&!job.session.cacheKey.isEmpty())
+        return RebuildCache.hash("bilingual-video-context-v1|"+job.session.cacheKey+"|"+lang);
+    }
+    String transcript=s.words.isEmpty()?"":s.text(0,s.words.size()-1);
+    return RebuildCache.hash("bilingual-video-context-v1|"+cfg.model+"|"+lang+"|"+RebuildCache.hash(transcript));
+  }
+
+  private static File bilingualContextFile(android.content.Context c,String key) {
+    return new File(RebuildCache.directory(c),"video-context-"+key+".txt");
+  }
+
+  private static String bilingualExistingContext(RebuildSource s, TranslationSettings cfg,String lang,
+      CaptionLanguageContext context,DeepSeekApiClient.RequestControl control) {
+    String key=bilingualContextKey(s,cfg,lang,context,control);
+    String memory=BILINGUAL_VIDEO_CONTEXT.get(key);
+    if(memory!=null)return memory;
+    if(control instanceof RebuildController.Job) {
+      try {
+        File f=bilingualContextFile(((RebuildController.Job)control).session.context,key);
+        if(f.isFile()&&f.length()>0&&f.length()<=16384) {
+          String card=new String(java.nio.file.Files.readAllBytes(f.toPath()),StandardCharsets.UTF_8).trim();
+          if(!card.isEmpty()) {
+            BILINGUAL_VIDEO_CONTEXT.put(key,card);
+            return card;
+          }
+        }
+      } catch(Exception ignored) {}
+    }
+    return "";
+  }
+
+  private static String bilingualTranscriptDigest(RebuildSource s) {
+    if(s.words.isEmpty())return "";
+    String all=s.text(0,s.words.size()-1);
+    if(all.length()<=16000)return all;
+    int windows=6,per=180,total=s.words.size();
+    StringBuilder out=new StringBuilder();
+    for(int w=0;w<windows;w++) {
+      int center=(int)((long)(total-1)*w/Math.max(1,windows-1));
+      int from=Math.max(0,Math.min(total-1,center-per/2));
+      int to=Math.min(total-1,from+per-1);
+      if(out.length()>0)out.append("\\n---\\n");
+      out.append(s.text(from,to));
+    }
+    return out.toString();
+  }
+
+  private static void bilingualMaybeBuildContext(RebuildSource s,TranslationSettings cfg,String lang,
+      CaptionLanguageContext context,DeepSeekApiClient.RequestControl control) {
+    if(!(control instanceof RebuildController.Job)||s.words.isEmpty())return;
+    RebuildController.Job job=(RebuildController.Job)control;
+    String key=bilingualContextKey(s,cfg,lang,context,control);
+    if(!bilingualExistingContext(s,cfg,lang,context,control).isEmpty())return;
+    long now=SystemClock.elapsedRealtime();
+    Long retry=BILINGUAL_CONTEXT_RETRY.get(key);
+    if(retry!=null&&retry>now)return;
+    if(!BILINGUAL_CONTEXT_LOADING.add(key))return;
+    android.content.Context app=job.session.context.getApplicationContext();
+    BILINGUAL_CONTEXT_IO.submit(() -> {
+      try {
+        String digest=bilingualTranscriptDigest(s);
+        if(digest.isEmpty())return;
+        JSONObject payload=new JSONObject()
+            .put("target_language",context.canApplyEnglishToChinese?lang:context.targetCode)
+            .put("transcript",digest)
+            .put("instruction",
+                "Create a compact video translation context card: topic/domain, recurring technical terms with preferred target-language wording, named products/people, and important reference relationships. Do not translate the transcript.");
+        String prompt="Analyze this video's transcript for later subtitle translation consistency. "
+            +"Return only {\\\"card\\\":\\\"...\\\"}. Keep card under 900 characters; prefer a compact glossary and topic notes.";
+        JSONObject request=ProviderRequestPolicy.request(cfg,prompt,payload,900);
+        request.put("stream",false);
+        request.put("response_format",new JSONObject().put("type","json_object"));
+        long deadline=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(12000);
+        Response response=send(cfg,request.toString(),null,deadline,null);
+        if(response.status<200||response.status>=300)throw new IOException("context_http_"+response.status);
+        JSONObject root=new JSONObject(response.body);
+        String raw=root.getJSONArray("choices").getJSONObject(0)
+            .getJSONObject("message").optString("content","").trim();
+        String card=new JSONObject(raw).optString("card","").replace('\\r',' ').replace('\\n',' ').trim();
+        if(card.length()>1400)card=card.substring(0,1400);
+        if(card.isEmpty())throw new IOException("context_empty");
+        BILINGUAL_VIDEO_CONTEXT.put(key,card);
+        File dest=bilingualContextFile(app,key),tmp=File.createTempFile("video-context-",".tmp",RebuildCache.directory(app));
+        try(FileOutputStream out=new FileOutputStream(tmp)) {
+          out.write(card.getBytes(StandardCharsets.UTF_8));out.getFD().sync();
+        }
+        java.nio.file.Files.move(tmp.toPath(),dest.toPath(),
+            java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+            java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+      } catch(Exception ignored) {
+        BILINGUAL_CONTEXT_RETRY.put(key,SystemClock.elapsedRealtime()+30000);
+      } finally {
+        BILINGUAL_CONTEXT_LOADING.remove(key);
+      }
+    });
+  }
+
   static RebuildProtocol.Plan rescueSimple(RebuildSource s, RebuildPlanner.Block b,
       TranslationSettings cfg, String lang, DeepSeekApiClient.RequestControl control,
       boolean priority, CaptionLanguageContext context) throws Exception {
+    String videoContextCard=bilingualExistingContext(s,cfg,lang,context,control);
     JSONObject payload = new JSONObject()
         .put("language", context.canApplyEnglishToChinese ? lang : context.targetCode)
         .put("source_text", s.text(b.from,b.to))
-        .put("context_before", RebuildPlanner.context(s,b.from-24,b.from-1))
-        .put("context_after", RebuildPlanner.context(s,b.to+1,b.to+24))
+        .put("context_before", RebuildPlanner.context(s,b.from-96,b.from-1))
+        .put("context_after", RebuildPlanner.context(s,b.to+1,b.to+48))
         .put("instruction",
             "Translate source_text faithfully. Context is read-only. Return only a JSON object with one string field named text.");
+    if(!videoContextCard.isEmpty())payload.put("video_context_card",videoContextCard);
     String rescuePrompt =
         "Translate only source_text into the selected target language. Preserve meaning, names, numbers, negation and technical terms. "
         + "Use context only to resolve meaning. Do not summarize. Return exactly {\\\"text\\\":\\\"translation\\\"}.";
@@ -411,6 +555,7 @@ replace_once(
     RebuildProtocol.Plan plan=RebuildProtocol.parseBound(local.toString(),s,b,context);
     trace(control,"BILINGUAL_RESCUE_ACCEPTED",
         "block="+b.index+";range="+b.from+"-"+b.to+";mode=simple_local_ownership");
+    bilingualMaybeBuildContext(s,cfg,lang,context,control);
     return plan;
   }
 
@@ -474,6 +619,20 @@ replace_once(
                   && "content_filter".equals(((RebuildApi.Failure) e).code);
 ''',
     '''          boolean filtered = filteredFailure;
+''',
+)
+
+
+
+# 1c) Increase read-only local context without increasing the block that must be translated.
+protocol = "translation-core/src/main/java/app/yydarlinker/deepseekcaptions/RebuildProtocol.java"
+replace_once(
+    protocol,
+    '''            .put("context_before", RebuildPlanner.context(s, b.from - 24, b.from - 1))
+            .put("context_after", RebuildPlanner.context(s, b.to + 1, b.to + 24));
+''',
+    '''            .put("context_before", RebuildPlanner.context(s, b.from - 96, b.from - 1))
+            .put("context_after", RebuildPlanner.context(s, b.to + 1, b.to + 48));
 ''',
 )
 
@@ -719,6 +878,15 @@ for row in provenance.get("files", []):
 if api_hits != 1:
     raise SystemExit(f"expected one provenance row for RebuildApi, found {api_hits}")
 
+protocol_sha = hashlib.sha256((ROOT / protocol).read_bytes()).hexdigest()
+protocol_hits = 0
+for row in provenance.get("files", []):
+    if row.get("destination") == protocol:
+        row["sha256"] = protocol_sha
+        protocol_hits += 1
+if protocol_hits != 1:
+    raise SystemExit(f"expected one provenance row for RebuildProtocol, found {protocol_hits}")
+
 presentation_sha = hashlib.sha256((ROOT / presentation).read_bytes()).hexdigest()
 presentation_hits = 0
 for row in provenance.get("new_files", []):
@@ -747,4 +915,4 @@ if language_hits != 1:
 ui_manifest_path.write_text(json.dumps(ui_manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 print("updated core provenance and intentional UI preservation hash")
-print("Bilingual v1.2.0 rescue pipeline + readable two-line + source fallback + main-UI portrait-only patch applied.")
+print("Bilingual v1.3.0 video-context + rescue pipeline + readable two-line + main-UI portrait-only patch applied.")
