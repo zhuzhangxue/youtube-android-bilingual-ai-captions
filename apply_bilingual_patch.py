@@ -48,7 +48,7 @@ replace_once(
 replace_once(
     "gradle.properties",
     "version=1.5.1\ncaptionBuildId=release-1.5.1\n",
-    "version=1.3.0\ncaptionBuildId=bilingual-1.3.0-video-context\n",
+    "version=1.4.0\ncaptionBuildId=bilingual-1.4.0-low-latency-context\n",
 )
 
 # Add an independent patch that restores portrait orientation after leaving
@@ -486,6 +486,8 @@ replace_once(
     android.content.Context app=job.session.context.getApplicationContext();
     BILINGUAL_CONTEXT_IO.submit(() -> {
       try {
+        Thread.sleep(1200);
+        if(!RebuildController.current(job.session))return;
         String digest=bilingualTranscriptDigest(s);
         if(digest.isEmpty())return;
         JSONObject payload=new JSONObject()
@@ -586,7 +588,7 @@ replace_once(
           e instanceof RebuildApi.Failure && "content_filter".equals(((RebuildApi.Failure)e).code);
       RebuildProtocol.Plan rescued = null;
       if (!fatal && !filteredFailure && s.plans[job.index] == null
-          && s.attempts[job.index] >= 2 && bilingualProtocolRescue(code)) {
+          && s.attempts[job.index] >= (job.priority ? 1 : 2) && bilingualProtocolRescue(code)) {
         try {
           rescued=RebuildApi.rescueSimple(
               s.source,b,s.config,s.target,job,job.priority,s.languageContext);
@@ -647,6 +649,28 @@ replace_once(
             .put("context_after", RebuildPlanner.context(s, b.to + 1, b.to + 48));
 ''',
 )
+
+
+
+# 1d) Low-latency guard: prefetch farther ahead, but keep each normal translation block unchanged.
+replace_once(
+    controller,
+    '''        if (b.start > s.position + 30000) break;
+''',
+    '''        if (b.start > s.position + 45000) break;
+''',
+)
+
+# Guard against accidentally turning the latency release into larger translation/generation blocks.
+planner = "translation-core/src/main/java/app/yydarlinker/deepseekcaptions/RebuildPlanner.java"
+planner_text = read(planner)
+for required in [
+    "static final int MAX_WORDS = 160, MAX_CHARS = 1600;",
+    "static final long MAX_SPAN = 30000;",
+    "long aim = out.isEmpty() ? 6000 : 14000;",
+]:
+    if required not in planner_text:
+        raise SystemExit("normal translation block policy changed unexpectedly: " + required)
 
 
 # 2) One source line + one translated line per timed page.
@@ -927,4 +951,4 @@ if language_hits != 1:
 ui_manifest_path.write_text(json.dumps(ui_manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 print("updated core provenance and intentional UI preservation hash")
-print("Bilingual v1.3.0 video-context + rescue pipeline + readable two-line + main-UI portrait-only patch applied.")
+print("Bilingual v1.4.0 low-latency context + rescue pipeline + readable two-line + main-UI portrait-only patch applied.")
