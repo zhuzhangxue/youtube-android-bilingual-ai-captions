@@ -1,0 +1,7 @@
+{
+  "created_at": "2026-10-13T01:08:30",
+  "description": "v1.2.0 reliability checkpoint. Adds a simplified rescue path for strict structured-output failures while keeping the existing bounded transient retries and English source fallback. Does not include the later whole-video context card or 45-second prefetch changes.",
+  "download_url": "https://github.com/zhuzhangxue/youtube-android-bilingual-ai-captions/releases/download/v1.2.0/anchored-ai-captions-bilingual.mpp",
+  "signature_download_url": "",
+  "version": "1.2.0"
+}
